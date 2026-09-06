@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Walker Ridge Well &ndash; Bioevent Network</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/vis-network.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/standalone/umd/vis-network.min.js"></script>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel-bg: #1e2127;
+    --panel-border: #33373f;
+    --text: #e6e8eb;
+    --text-dim: #9aa0a8;
+    --accent: #5aa9e6;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  #app { display: flex; height: 100vh; }
+  #sidebar {
+    width: 300px; min-width: 300px; padding: 16px;
+    background: var(--panel-bg); border-right: 1px solid var(--panel-border);
+    overflow-y: auto;
+  }
+  #sidebar h1 { font-size: 16px; margin: 0 0 4px; }
+  #sidebar .subtitle { font-size: 12px; color: var(--text-dim); margin-bottom: 16px; }
+  .stat-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+  .stat-row span:last-child { color: var(--accent); font-weight: 600; }
+  fieldset {
+    border: 1px solid var(--panel-border); border-radius: 6px;
+    margin: 14px 0; padding: 10px 12px;
+  }
+  legend { font-size: 12px; color: var(--text-dim); padding: 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .epoch-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; cursor: pointer; }
+  .epoch-swatch { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .epoch-row input { margin: 0; }
+  .row-btns { display: flex; gap: 6px; margin-bottom: 8px; }
+  .row-btns button {
+    background: none; border: 1px solid var(--panel-border); color: var(--text-dim);
+    border-radius: 4px; padding: 3px 8px; font-size: 11px; cursor: pointer;
+  }
+  .row-btns button:hover { color: var(--text); border-color: var(--accent); }
+  label.toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+  #degreeSlider { width: 100%; }
+  #degreeVal { color: var(--accent); font-weight: 600; }
+  #search {
+    width: 100%; padding: 6px 8px; border-radius: 4px; border: 1px solid var(--panel-border);
+    background: #0f1114; color: var(--text); font-size: 13px;
+  }
+  .legend-shapes { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .legend-shapes div { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+  .legend-shape { width: 12px; height: 12px; flex-shrink: 0; background: #4c566a; }
+  .legend-shape.circle { border-radius: 50%; background: #f46d43; }
+  #network-wrap { flex: 1; position: relative; }
+  #network { position: absolute; inset: 0; }
+  #tooltip {
+    position: absolute; display: none; max-width: 320px;
+    background: #0f1114; border: 1px solid var(--panel-border); border-radius: 6px;
+    padding: 10px 12px; font-size: 12px; color: var(--text); pointer-events: none;
+    z-index: 10; line-height: 1.5;
+  }
+  #tooltip b { color: var(--accent); }
+  #tooltip .ttl { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  #empty-msg {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: #3b2f1a; border: 1px solid #6b5424; color: #f0d998;
+    padding: 6px 14px; border-radius: 6px; font-size: 12px; display: none;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <h1>Walker Ridge (WR)</h1>
+    <div class="subtitle">Well &harr; bioevent network</div>
+
+    <div class="stat-row"><span>Wells</span><span id="statWells">-</span></div>
+    <div class="stat-row"><span>Bioevents (bugs)</span><span id="statBugs">-</span></div>
+    <div class="stat-row"><span>Edges (well&ndash;bug links)</span><span id="statEdges">-</span></div>
+    <div class="stat-row"><span>Picks represented</span><span id="statPicks">-</span></div>
+
+    <fieldset>
+      <legend>Epoch</legend>
+      <div class="row-btns">
+        <button id="epochAll">All</button>
+        <button id="epochNone">None</button>
+      </div>
+      <div id="epochList"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Confidence</legend>
+      <label class="toggle">
+        <input type="checkbox" id="defOnly">
+        Definite picks only
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Bug connectivity</legend>
+      <label style="font-size:13px;">Min wells per bug: <span id="degreeVal">1</span></label>
+      <input type="range" id="degreeSlider" min="1" max="1" value="1" step="1">
+    </fieldset>
+
+    <fieldset>
+      <legend>Search</legend>
+      <input type="text" id="search" placeholder="well API / name or bug name...">
+    </fieldset>
+
+    <fieldset>
+      <legend>Legend</legend>
+      <div class="legend-shapes">
+        <div><span class="legend-shape"></span> Well (API number)</div>
+        <div><span class="legend-shape circle"></span> Bioevent (bug), colored by epoch, sized by # wells</div>
+      </div>
+    </fieldset>
+  </div>
+  <div id="network-wrap">
+    <div id="network"></div>
+    <div id="tooltip"></div>
+    <div id="empty-msg">No nodes match the current filters</div>
+  </div>
+</div>
+
+<script>
+const GRAPH = __GRAPH_DATA_JSON__;
+
+document.getElementById('statWells').textContent = GRAPH.stats.wells;
+document.getElementById('statBugs').textContent = GRAPH.stats.bugs;
+document.getElementById('statEdges').textContent = GRAPH.stats.edges;
+document.getElementById('statPicks').textContent = GRAPH.stats.picks;
+
+// Build epoch checkboxes
+const epochListEl = document.getElementById('epochList');
+const epochState = {};
+GRAPH.epochOrder.forEach(ep => {
+  epochState[ep] = true;
+  const row = document.createElement('label');
+  row.className = 'epoch-row';
+  row.innerHTML = `<input type="checkbox" checked data-epoch="${ep}">
+    <span class="epoch-swatch" style="background:${GRAPH.epochColor[ep]}"></span>
+    <span>${ep}</span>`;
+  epochListEl.appendChild(row);
+});
+epochListEl.querySelectorAll('input[type=checkbox]').forEach(cb => {
+  cb.addEventListener('change', () => {
+    epochState[cb.dataset.epoch] = cb.checked;
+    applyFilters();
+  });
+});
+document.getElementById('epochAll').addEventListener('click', () => {
+  epochListEl.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = true; epochState[cb.dataset.epoch] = true; });
+  applyFilters();
+});
+document.getElementById('epochNone').addEventListener('click', () => {
+  epochListEl.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = false; epochState[cb.dataset.epoch] = false; });
+  applyFilters();
+});
+
+const maxDegree = Math.max(1, ...GRAPH.nodes.filter(n => n.group === 'bug').map(n => n.wellDegree));
+const degreeSlider = document.getElementById('degreeSlider');
+degreeSlider.max = maxDegree;
+degreeSlider.addEventListener('input', () => {
+  document.getElementById('degreeVal').textContent = degreeSlider.value;
+  applyFilters();
+});
+
+const defOnlyEl = document.getElementById('defOnly');
+defOnlyEl.addEventListener('change', applyFilters);
+
+const searchEl = document.getElementById('search');
+searchEl.addEventListener('input', applyFilters);
+
+// vis-network datasets
+const allNodesArr = GRAPH.nodes.map(n => ({
+  id: n.id, label: n.label, group: n.group, shape: n.shape,
+  color: n.group === 'bug' ? { background: n.color, border: '#20232a' } : { background: n.color, border: '#20232a' },
+  size: n.group === 'bug' ? n.size : 16,
+  font: { color: '#cfd3d8', size: n.group === 'well' ? 10 : 11 },
+  _raw: n,
+}));
+const allEdgesArr = GRAPH.edges.map((e, i) => ({
+  id: 'e' + i, from: e.from, to: e.to,
+  width: e.width, color: { color: '#5b616b', opacity: 0.55 },
+  _raw: e,
+}));
+
+const nodesDS = new vis.DataSet(allNodesArr);
+const edgesDS = new vis.DataSet(allEdgesArr);
+
+const container = document.getElementById('network');
+const data = { nodes: nodesDS, edges: edgesDS };
+const options = {
+  nodes: { borderWidth: 1 },
+  edges: { smooth: false },
+  physics: {
+    solver: 'forceAtlas2Based',
+    forceAtlas2Based: { gravitationalConstant: -60, centralGravity: 0.008, springLength: 90, springConstant: 0.08, avoidOverlap: 0.6 },
+    stabilization: { iterations: 250 },
+    maxVelocity: 30,
+    timestep: 0.4,
+  },
+  interaction: { hover: true, tooltipDelay: 100 },
+};
+const network = new vis.Network(container, data, options);
+network.once('stabilizationIterationsDone', () => {
+  network.setOptions({ physics: false });
+});
+
+// Tooltip
+const tooltip = document.getElementById('tooltip');
+function fmtList(arr, max=6) {
+  if (!arr || !arr.length) return '&mdash;';
+  const shown = arr.slice(0, max);
+  let s = shown.join(', ');
+  if (arr.length > max) s += ` (+${arr.length - max} more)`;
+  return s;
+}
+network.on('hoverNode', (params) => {
+  const n = nodesDS.get(params.node)._raw;
+  let html = '';
+  if (n.group === 'well') {
+    html = `<div class="ttl">${n.label}</div>
+      API: <b>${n.api}</b><br>
+      Lease: ${n.lease || '&mdash;'}<br>
+      Reports: ${n.reportCount}`;
+  } else {
+    html = `<div class="ttl">${n.label}</div>
+      Epoch: <b>${n.epoch}</b><br>
+      Age label(s): ${fmtList(n.ages)}<br>
+      Wells: <b>${n.wellDegree}</b> &middot; Picks: ${n.totalPicks}`;
+  }
+  tooltip.innerHTML = html;
+  tooltip.style.display = 'block';
+});
+network.on('blurNode', () => { tooltip.style.display = 'none'; });
+network.on('hoverEdge', (params) => {
+  const e = edgesDS.get(params.edge)._raw;
+  const wellLabel = nodesDS.get(e.from)._raw.label;
+  const bugLabel = nodesDS.get(e.to)._raw.label;
+  tooltip.innerHTML = `<div class="ttl">${wellLabel} &harr; ${bugLabel}</div>
+    Picks: <b>${e.count}</b> (Definite: ${e.defCount}, Possible: ${e.posCount})<br>
+    Age(s): ${fmtList(e.ages)}<br>
+    Depth(s) MD: ${fmtList(e.mds.map(x => Math.round(x)))}`;
+  tooltip.style.display = 'block';
+});
+network.on('blurEdge', () => { tooltip.style.display = 'none'; });
+network.on('mousemove', (params) => {
+  if (tooltip.style.display === 'block') {
+    tooltip.style.left = (params.pointer.DOM.x + 16) + 'px';
+    tooltip.style.top = (params.pointer.DOM.y + 12) + 'px';
+  }
+});
+
+// Filtering
+function applyFilters() {
+  const minDegree = parseInt(degreeSlider.value, 10);
+  const defOnly = defOnlyEl.checked;
+  const q = searchEl.value.trim().toLowerCase();
+
+  // Step 1: bug visibility from epoch/degree filters alone (no search yet)
+  const coreBugIds = new Set();
+  GRAPH.nodes.forEach(n => {
+    if (n.group !== 'bug') return;
+    if (!epochState[n.epoch]) return;
+    if (n.wellDegree < minDegree) return;
+    coreBugIds.add(n.id);
+  });
+
+  // Step 2: edges allowed by defOnly + core bug visibility
+  const edgeAllowed = GRAPH.edges.map(e => coreBugIds.has(e.to) && (!defOnly || e.defCount > 0));
+
+  // Step 3: direct text matches (search)
+  const directMatchWell = new Set();
+  const directMatchBug = new Set();
+  if (q) {
+    GRAPH.nodes.forEach(n => {
+      const hay = n.group === 'well' ? (n.label + ' ' + n.api).toLowerCase() : n.label.toLowerCase();
+      if (!hay.includes(q)) return;
+      if (n.group === 'well') directMatchWell.add(n.id); else directMatchBug.add(n.id);
+    });
+  }
+
+  // Step 4: final bug/well visibility. With no query: bug visible if core-visible
+  // and has >=1 allowed edge; well visible if it has >=1 allowed edge to a
+  // core-visible bug. With a query: also pull in neighbors of direct matches
+  // (searching a bug shows its wells; searching a well shows its bugs).
+  const wellHasEdge = new Set();
+  const bugHasEdge = new Set();
+  GRAPH.edges.forEach((e, i) => {
+    if (!edgeAllowed[i]) return;
+    wellHasEdge.add(e.from);
+    bugHasEdge.add(e.to);
+  });
+
+  let visibleBugIds, visibleWellIds;
+  if (q) {
+    visibleBugIds = new Set(directMatchBug);
+    visibleWellIds = new Set(directMatchWell);
+    GRAPH.edges.forEach((e, i) => {
+      if (!edgeAllowed[i]) return;
+      if (directMatchWell.has(e.from)) visibleBugIds.add(e.to);
+      if (directMatchBug.has(e.to)) visibleWellIds.add(e.from);
+    });
+    // keep only bugs/wells that still pass the core epoch/degree/defOnly filter
+    visibleBugIds = new Set([...visibleBugIds].filter(id => coreBugIds.has(id)));
+  } else {
+    visibleBugIds = new Set([...coreBugIds].filter(id => bugHasEdge.has(id)));
+    visibleWellIds = new Set(wellHasEdge);
+  }
+
+  const nodeUpdates = GRAPH.nodes.map(n => ({
+    id: n.id,
+    hidden: n.group === 'bug' ? !visibleBugIds.has(n.id) : !visibleWellIds.has(n.id),
+  }));
+
+  const edgeUpdates = GRAPH.edges.map((e, i) => {
+    const visible = edgeAllowed[i] && visibleBugIds.has(e.to) && visibleWellIds.has(e.from);
+    return {
+      id: 'e' + i,
+      hidden: !visible,
+      width: defOnly ? Math.max(e.defWidth, 0.5) : e.width,
+    };
+  });
+
+  nodesDS.update(nodeUpdates);
+  edgesDS.update(edgeUpdates);
+
+  const anyVisible = nodeUpdates.some(u => !u.hidden);
+  document.getElementById('empty-msg').style.display = anyVisible ? 'none' : 'block';
+}
+
+applyFilters();
+</script>
+</body>
+</html>
