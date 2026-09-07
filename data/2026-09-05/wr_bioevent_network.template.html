@@ -72,8 +72,23 @@
   #degreeCountMsg { font-size: 11px; color: var(--text-dim); margin-top: 6px; }
   #network-wrap { flex: 1; position: relative; }
   #network { position: absolute; inset: 0; }
+  #scatter-wrap {
+    width: 340px; min-width: 340px; position: relative;
+    border-left: 1px solid var(--panel-border); background: var(--panel-bg);
+    display: flex; flex-direction: column;
+  }
+  #scatter-title { font-size: 12px; color: var(--text-dim); padding: 12px 14px 4px; }
+  #scatter-caption { font-size: 11px; color: var(--text-dim); padding: 0 14px 10px; }
+  #scatterSvg { flex: 1; width: 100%; }
+  .scatter-dot {
+    fill: #7d8590; stroke: none; cursor: pointer;
+    transition: r 0.1s ease, fill 0.1s ease;
+  }
+  .scatter-dot.highlighted {
+    fill: var(--accent); stroke: #ffffff; stroke-width: 1;
+  }
   #tooltip {
-    position: absolute; display: none; max-width: 320px;
+    position: fixed; display: none; max-width: 320px;
     background: #0f1114; border: 1px solid var(--panel-border); border-radius: 6px;
     padding: 10px 12px; font-size: 12px; color: var(--text); pointer-events: none;
     z-index: 10; line-height: 1.5;
@@ -154,9 +169,14 @@
   </div>
   <div id="network-wrap">
     <div id="network"></div>
-    <div id="tooltip"></div>
     <div id="empty-msg">No nodes match the current filters</div>
   </div>
+  <div id="scatter-wrap">
+    <div id="scatter-title">Well locations (surface lat/long)</div>
+    <svg id="scatterSvg" preserveAspectRatio="xMidYMid meet"></svg>
+    <div id="scatter-caption"></div>
+  </div>
+  <div id="tooltip"></div>
 </div>
 
 <script>
@@ -293,10 +313,9 @@ network.on('hoverNode', (params) => {
   const n = nodesDS.get(params.node)._raw;
   let html = '';
   if (n.group === 'well') {
-    html = `<div class="ttl">${n.label}</div>
-      API: <b>${n.api}</b><br>
-      Lease: ${n.lease || '&mdash;'}<br>
-      Reports: ${n.reportCount}`;
+    html = wellTooltipHtml(n);
+    const circle = scatterDotById[n.id];
+    if (circle) circle.classList.add('highlighted');
   } else {
     html = `<div class="ttl">${n.label}</div>
       Epoch: <b>${n.epoch}</b><br>
@@ -309,7 +328,11 @@ network.on('hoverNode', (params) => {
   tooltip.innerHTML = html;
   tooltip.style.display = 'block';
 });
-network.on('blurNode', () => { tooltip.style.display = 'none'; });
+network.on('blurNode', (params) => {
+  tooltip.style.display = 'none';
+  const circle = scatterDotById[params.node];
+  if (circle) circle.classList.remove('highlighted');
+});
 network.on('hoverEdge', (params) => {
   const e = edgesDS.get(params.edge)._raw;
   const wellLabel = nodesDS.get(e.from)._raw.label;
@@ -321,12 +344,80 @@ network.on('hoverEdge', (params) => {
   tooltip.style.display = 'block';
 });
 network.on('blurEdge', () => { tooltip.style.display = 'none'; });
-network.on('mousemove', (params) => {
+
+// Shared tooltip positioning: tracks the raw mouse position globally (fixed
+// positioning, viewport coordinates) so both the network canvas and the
+// scatter panel's SVG circles can reuse the same tooltip element/logic.
+document.addEventListener('mousemove', (e) => {
   if (tooltip.style.display === 'block') {
-    tooltip.style.left = (params.pointer.DOM.x + 16) + 'px';
-    tooltip.style.top = (params.pointer.DOM.y + 12) + 'px';
+    tooltip.style.left = (e.clientX + 16) + 'px';
+    tooltip.style.top = (e.clientY + 12) + 'px';
   }
 });
+
+// --------------------------------------------------------------------------
+// Geographic scatter panel: one dot per well (surface longitude=x,
+// latitude=y). No map projection -- WR's extent is small enough (~1.6 deg
+// lon x ~1 deg lat) that plotting raw degrees preserves relative spacing
+// well enough for this purpose. Linked to the network graph: hovering a
+// well node highlights its scatter dot and vice versa.
+// --------------------------------------------------------------------------
+const wellNodes = GRAPH.nodes.filter(n => n.group === 'well');
+const lons = wellNodes.map(n => n.lon);
+const lats = wellNodes.map(n => n.lat);
+const lonMin = Math.min(...lons), lonMax = Math.max(...lons);
+const latMin = Math.min(...lats), latMax = Math.max(...lats);
+const lonSpan = (lonMax - lonMin) || 0.01;
+const latSpan = (latMax - latMin) || 0.01;
+
+const scatterSvg = document.getElementById('scatterSvg');
+const VB_W = 100, MARGIN = 0.1;
+const VB_H = VB_W * (latSpan / lonSpan); // keeps 1 degree lon and 1 degree lat the same SVG-unit size
+scatterSvg.setAttribute('viewBox', `0 0 ${VB_W} ${VB_H}`);
+
+function lonToX(lon) {
+  return VB_W * MARGIN + VB_W * (1 - 2 * MARGIN) * (lon - lonMin) / lonSpan;
+}
+function latToY(lat) {
+  // invert: north (higher latitude) should render toward the top (smaller y)
+  return VB_H - (VB_H * MARGIN + VB_H * (1 - 2 * MARGIN) * (lat - latMin) / latSpan);
+}
+
+const scatterDotById = {};
+wellNodes.forEach(n => {
+  const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  circle.setAttribute('cx', lonToX(n.lon).toFixed(3));
+  circle.setAttribute('cy', latToY(n.lat).toFixed(3));
+  circle.setAttribute('r', 1.6);
+  circle.setAttribute('class', 'scatter-dot');
+  circle.addEventListener('mouseenter', () => setWellHighlight(n.id, true));
+  circle.addEventListener('mouseleave', () => setWellHighlight(n.id, false));
+  scatterSvg.appendChild(circle);
+  scatterDotById[n.id] = circle;
+});
+document.getElementById('scatter-caption').textContent =
+  `Lon ${lonMin.toFixed(2)} to ${lonMax.toFixed(2)}, Lat ${latMin.toFixed(2)} to ${latMax.toFixed(2)} (${wellNodes.length} wells)`;
+
+function wellTooltipHtml(n) {
+  return `<div class="ttl">${n.label}</div>
+    API: <b>${n.api}</b><br>
+    Lease: ${n.lease || '&mdash;'}<br>
+    Reports: ${n.reportCount}`;
+}
+
+// Single source of truth for well highlight state, driven from either panel.
+function setWellHighlight(id, on) {
+  const circle = scatterDotById[id];
+  if (circle) circle.classList.toggle('highlighted', on);
+  if (on) {
+    network.selectNodes([id]);
+    tooltip.innerHTML = wellTooltipHtml(nodesDS.get(id)._raw);
+    tooltip.style.display = 'block';
+  } else {
+    if (network.getSelectedNodes().includes(id)) network.unselectAll();
+    tooltip.style.display = 'none';
+  }
+}
 
 // Filtering
 function applyFilters() {
