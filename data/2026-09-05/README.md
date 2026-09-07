@@ -138,3 +138,57 @@ the full numbers, but in short:
 
 No manual reinterpretation of the BOEM spec was needed — the actual file
 structure matched the documented layout exactly.
+
+## Walker Ridge (WR) well &harr; bioevent network
+
+`build_wr_network.py` derives a second, downstream artifact scoped to
+`surface_area = 'WR'`: `wr_bioevent_network.html`, an interactive graph
+linking wells to the biostratigraphic events ("bugs") picked in them.
+`wr_bioevent_network.template.html` is the HTML/JS shell it fills in
+(vis-network, loaded from cdnjs — no other external dependency).
+
+**Pipeline** (agreed interactively): exclude `paleo_age` picks with no
+recognizable Latin binomial (lithology, structural/QC markers, informal
+"local marker" genus+code entries, bare chronostratigraphic-only picks,
+literal placeholders like "first/last sample examined" and "- - - - -");
+split the remainder into `age` + `bug` on a leading epoch/substage prefix;
+mechanically normalize `bug` (collapse double-spaces, strip a trailing
+single-letter tag after a known event word, plus two confirmed spelling
+fixes — `druggii`→`druggi`, `furcatolithioides`→`furcatolithoides` — that
+turned out to be renames, not merges, since neither had a pre-existing
+correctly-spelled counterpart in WR). Result: 4,771 of 7,629 WR picks kept,
+106 wells, 422 canonical bugs, 4,360 well&ndash;bug edges.
+
+**Age color scale:** bug nodes are colored on a continuous viridis scale
+across a 31-position canonical chronostratigraphic ordering (oldest =
+Lower Cretaceous (Hauterivian), youngest = Holocene; see `AGE_ORDER` in
+`build_wr_network.py`). Node size encodes degree centrality (# distinct
+WR wells that bug was picked in; range 1&ndash;55, median 5). Only 3 of
+422 bugs are picked at more than one age — their color is the average of
+those ages' positions ("blended"), not a pick of one side.
+
+**Flagged anomaly — not silently corrected:** 3 picks (bug
+`Inaperturopollenites hiatus increase`, wells 608124014200 and
+608124015001) are labeled `Upper Paleocene (Danian)` in the source data.
+Danian is conventionally the *oldest* Paleocene stage, not the youngest,
+so this is a chronostratigraphic inconsistency — confirmed present in the
+raw text, not a parsing artifact. It's also **not a single-source typo**:
+the label comes from two independent reporters (BUGWARE Inc. and
+PetroStrat Ltd) on recent (2023&ndash;2024) reports for Shell Offshore
+wells. Per direction, this is kept as its own distinct age label (colored
+at the Danian position, since that's where the named stage belongs) and
+flagged in the graph (dashed orange node border, tooltip note, sidebar
+legend note) rather than corrected or merged away — treated as an open
+question about the source data worth another look, not a bug to patch
+around.
+
+`Middle Pleistocene (Ionian)` is kept as its own label too, per direction
+— "Ionian" is an older informal name for what's now formally called
+Chibanian, not an error.
+
+**Implementation note:** vis-network's automatic per-group color palette
+silently overrides an explicit per-node `color` once two distinct `group`
+values are each present in quantity (verified via isolated repro — one
+group is fine, two is not). The shipped page works around this by not
+passing a `group` key into vis's node objects at all; well vs. bug is
+distinguished by shape plus the app's own filtering logic instead.

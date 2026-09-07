@@ -55,6 +55,21 @@
   .legend-shapes div { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
   .legend-shape { width: 12px; height: 12px; flex-shrink: 0; background: #4c566a; }
   .legend-shape.circle { border-radius: 50%; background: #f46d43; }
+  .legend-shape.circle.anomaly-shape {
+    background: #999; border: 2px dashed #ff8a3d; box-sizing: border-box;
+  }
+  .age-gradient-wrap { display: flex; gap: 10px; margin-top: 8px; }
+  .age-gradient-bar { width: 14px; height: 210px; border-radius: 7px; flex-shrink: 0; }
+  .age-gradient-ticks { position: relative; height: 210px; flex: 1; font-size: 11px; color: var(--text-dim); }
+  .age-gradient-tick { position: absolute; left: 0; transform: translateY(-50%); white-space: nowrap; }
+  .anomaly-note {
+    margin-top: 10px; font-size: 11px; color: #f0d998; background: #3b2f1a;
+    border: 1px solid #6b5424; border-radius: 4px; padding: 6px 8px; line-height: 1.4;
+  }
+  .slider-row { margin-top: 10px; }
+  .slider-row label { font-size: 13px; display: block; margin-bottom: 2px; }
+  .slider-row input[type=range] { width: 100%; }
+  #degreeCountMsg { font-size: 11px; color: var(--text-dim); margin-top: 6px; }
   #network-wrap { flex: 1; position: relative; }
   #network { position: absolute; inset: 0; }
   #tooltip {
@@ -101,9 +116,16 @@
     </fieldset>
 
     <fieldset>
-      <legend>Bug connectivity</legend>
-      <label style="font-size:13px;">Min wells per bug: <span id="degreeVal">1</span></label>
-      <input type="range" id="degreeSlider" min="1" max="1" value="1" step="1">
+      <legend>Bug connectivity (degree)</legend>
+      <div class="slider-row">
+        <label>Min wells per bug: <span id="degreeVal">1</span></label>
+        <input type="range" id="degreeSlider" min="1" max="1" value="1" step="1">
+      </div>
+      <div class="slider-row">
+        <label>Max wells per bug: <span id="degreeMaxVal">1</span></label>
+        <input type="range" id="degreeMaxSlider" min="1" max="1" value="1" step="1">
+      </div>
+      <div id="degreeCountMsg"></div>
     </fieldset>
 
     <fieldset>
@@ -115,7 +137,18 @@
       <legend>Legend</legend>
       <div class="legend-shapes">
         <div><span class="legend-shape"></span> Well (API number)</div>
-        <div><span class="legend-shape circle"></span> Bioevent (bug), colored by epoch, sized by # wells</div>
+        <div><span class="legend-shape circle"></span> Bioevent (bug), sized by # wells</div>
+        <div><span class="legend-shape circle anomaly-shape"></span> Bug with a flagged age anomaly (see tooltip)</div>
+      </div>
+      <div class="age-gradient-wrap">
+        <div class="age-gradient-bar" id="ageGradientBar"></div>
+        <div class="age-gradient-ticks" id="ageGradientTicks"></div>
+      </div>
+      <div class="anomaly-note">
+        &#9888; 1 bug (<em>Inaperturopollenites hiatus increase</em>) is driven entirely by
+        picks labeled &ldquo;Upper Paleocene (Danian)&rdquo; in the source data &mdash;
+        Danian is conventionally the <em>oldest</em> Paleocene stage, not the youngest.
+        Colored at the Danian position; not silently corrected. Hover the node for details.
       </div>
     </fieldset>
   </div>
@@ -161,11 +194,33 @@ document.getElementById('epochNone').addEventListener('click', () => {
   applyFilters();
 });
 
+// Age color gradient legend (viridis, built from stops computed in Python)
+const gradientCss = 'linear-gradient(to bottom, ' +
+  GRAPH.viridisStops.map(([t, hex]) => `${hex} ${(t * 100).toFixed(0)}%`).join(', ') + ')';
+document.getElementById('ageGradientBar').style.background = gradientCss;
+const ticksEl = document.getElementById('ageGradientTicks');
+GRAPH.epochOrder.forEach(ep => {
+  const frac = GRAPH.epochFraction[ep];
+  const tick = document.createElement('div');
+  tick.className = 'age-gradient-tick';
+  tick.style.top = (frac * 100) + '%';
+  tick.textContent = ep;
+  ticksEl.appendChild(tick);
+});
+
 const maxDegree = Math.max(1, ...GRAPH.nodes.filter(n => n.group === 'bug').map(n => n.wellDegree));
 const degreeSlider = document.getElementById('degreeSlider');
+const degreeMaxSlider = document.getElementById('degreeMaxSlider');
 degreeSlider.max = maxDegree;
+degreeMaxSlider.max = maxDegree;
+degreeMaxSlider.value = maxDegree;
+document.getElementById('degreeMaxVal').textContent = maxDegree;
 degreeSlider.addEventListener('input', () => {
   document.getElementById('degreeVal').textContent = degreeSlider.value;
+  applyFilters();
+});
+degreeMaxSlider.addEventListener('input', () => {
+  document.getElementById('degreeMaxVal').textContent = degreeMaxSlider.value;
   applyFilters();
 });
 
@@ -176,13 +231,27 @@ const searchEl = document.getElementById('search');
 searchEl.addEventListener('input', applyFilters);
 
 // vis-network datasets
-const allNodesArr = GRAPH.nodes.map(n => ({
-  id: n.id, label: n.label, group: n.group, shape: n.shape,
-  color: n.group === 'bug' ? { background: n.color, border: '#20232a' } : { background: n.color, border: '#20232a' },
-  size: n.group === 'bug' ? n.size : 16,
-  font: { color: '#cfd3d8', size: n.group === 'well' ? 10 : 11 },
-  _raw: n,
-}));
+// Deliberately NOT passing a `group` key into vis's node objects: with two
+// distinct group values each having many members, vis-network's built-in
+// group auto-coloring silently overrides explicit per-node `color` (verified
+// via isolated repro -- a single group is fine, two groups is not). We
+// distinguish well/bug entirely via shape + our own `_raw.group`.
+const allNodesArr = GRAPH.nodes.map(n => {
+  const node = {
+    id: n.id, label: n.label, shape: n.shape,
+    color: { background: n.color, border: '#20232a' },
+    size: n.group === 'bug' ? n.size : 16,
+    font: { color: '#cfd3d8', size: n.group === 'well' ? 10 : 11 },
+    borderWidth: 1,
+    _raw: n,
+  };
+  if (n.group === 'bug' && n.anomaly) {
+    node.color.border = '#ff8a3d';
+    node.borderWidth = 3;
+    node.shapeProperties = { borderDashes: [4, 3] };
+  }
+  return node;
+});
 const allEdgesArr = GRAPH.edges.map((e, i) => ({
   id: 'e' + i, from: e.from, to: e.to,
   width: e.width, color: { color: '#5b616b', opacity: 0.55 },
@@ -231,8 +300,11 @@ network.on('hoverNode', (params) => {
   } else {
     html = `<div class="ttl">${n.label}</div>
       Epoch: <b>${n.epoch}</b><br>
-      Age label(s): ${fmtList(n.ages)}<br>
+      Age label(s): ${fmtList(n.ages)}${n.blended ? ' <i>(blended color across ages)</i>' : ''}<br>
       Wells: <b>${n.wellDegree}</b> &middot; Picks: ${n.totalPicks}`;
+    if (n.anomaly) {
+      html += `<div style="margin-top:6px;color:#ffb877;">&#9888; ${n.anomalyNotes.join(' ')}</div>`;
+    }
   }
   tooltip.innerHTML = html;
   tooltip.style.display = 'block';
@@ -258,16 +330,20 @@ network.on('mousemove', (params) => {
 
 // Filtering
 function applyFilters() {
-  const minDegree = parseInt(degreeSlider.value, 10);
+  let minDegree = parseInt(degreeSlider.value, 10);
+  let maxDegree = parseInt(degreeMaxSlider.value, 10);
+  if (minDegree > maxDegree) { [minDegree, maxDegree] = [maxDegree, minDegree]; }
   const defOnly = defOnlyEl.checked;
   const q = searchEl.value.trim().toLowerCase();
 
   // Step 1: bug visibility from epoch/degree filters alone (no search yet)
   const coreBugIds = new Set();
+  let totalBugCount = 0;
   GRAPH.nodes.forEach(n => {
     if (n.group !== 'bug') return;
+    totalBugCount++;
     if (!epochState[n.epoch]) return;
-    if (n.wellDegree < minDegree) return;
+    if (n.wellDegree < minDegree || n.wellDegree > maxDegree) return;
     coreBugIds.add(n.id);
   });
 
@@ -332,6 +408,13 @@ function applyFilters() {
 
   const anyVisible = nodeUpdates.some(u => !u.hidden);
   document.getElementById('empty-msg').style.display = anyVisible ? 'none' : 'block';
+
+  const shownBugCount = nodeUpdates.filter(u => {
+    const raw = nodesDS.get(u.id)._raw;
+    return raw.group === 'bug' && !u.hidden;
+  }).length;
+  document.getElementById('degreeCountMsg').textContent =
+    `Showing ${shownBugCount} of ${totalBugCount} bug nodes (degree ${minDegree}–${maxDegree})`;
 }
 
 applyFilters();

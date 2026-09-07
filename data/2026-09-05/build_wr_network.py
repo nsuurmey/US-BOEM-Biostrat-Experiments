@@ -54,17 +54,82 @@ EXTRA_SPELLING_FIX = {
 
 EPOCH_ORDER = ['Cretaceous', 'Paleocene', 'Eocene', 'Oligocene', 'Miocene',
                'Pliocene', 'Pleistocene', 'Holocene']
-EPOCH_COLOR = {
-    'Cretaceous': '#313695',
-    'Paleocene': '#4575b4',
-    'Eocene': '#74add1',
-    'Oligocene': '#abd9e9',
-    'Miocene': '#fee090',
-    'Pliocene': '#fdae61',
-    'Pleistocene': '#f46d43',
-    'Holocene': '#a50026',
-    'Unknown': '#999999',
+
+# --------------------------------------------------------------------------
+# Canonical age ordering (agreed interactively): 31 chronological positions,
+# oldest (0) to youngest (30), covering all 32 distinct `age` labels found in
+# WR. 'Upper Paleocene (Danian)' shares position 10 with 'Lower Paleocene
+# (Danian)' -- Danian is conventionally the OLDEST Paleocene stage, so the
+# "Upper" qualifier on that label is a chronostratigraphic inconsistency in
+# the source data (confirmed present in the raw text from two independent
+# reporters -- BUGWARE Inc. and PetroStrat Ltd -- on 2023-2024 reports for
+# Shell Offshore wells, not a single-source typo). Per user direction: kept
+# as its own distinct label (not silently corrected or merged), flagged via
+# ANOMALOUS_AGES below, and given the same color position as the correctly
+# labeled Danian entries since that's where the named stage actually belongs.
+# 'Middle Pleistocene (Ionian)' is kept as-is too -- an older informal name
+# for the Chibanian stage, not an error, per user direction.
+# --------------------------------------------------------------------------
+AGE_ORDER = [
+    'Lower Cretaceous (Hauterivian)', 'Lower Cretaceous (Barremian)',
+    'Lower Cretaceous (Aptian)', 'Lower Cretaceous (Albian)',
+    'Upper Cretaceous (Cenomanian)', 'Upper Cretaceous (Turonian)',
+    'Upper Cretaceous (Coniacian)', 'Upper Cretaceous (Santonian)',
+    'Upper Cretaceous (Campanian)', 'Upper Cretaceous (Maastrichtian)',
+    'Lower Paleocene (Danian)',  # position 10
+    'Upper Paleocene (Selandian)', 'Upper Paleocene (Thanetian)',
+    'Lower Eocene (Ypresian)', 'Middle Eocene (Lutetian)',
+    'Middle Eocene (Bartonian)', 'Upper Eocene (Priabonian)',
+    'Lower Oligocene (Rupelian)', 'Upper Oligocene (Chattian)',
+    'Lower Miocene (Aquitanian)', 'Lower Miocene (Burdigalian)',
+    'Middle Miocene (Langhian)', 'Middle Miocene (Serravallian)',
+    'Upper Miocene (Tortonian)', 'Upper Miocene (Messinian)',
+    'Lower Pliocene (Zanclean)', 'Upper Pliocene (Piacenzian)',
+    'Lower Pleistocene (Gelasian)', 'Lower Pleistocene (Calabrian)',
+    'Middle Pleistocene (Ionian)', 'Holocene',
+]
+AGE_POSITION = {age: i for i, age in enumerate(AGE_ORDER)}
+MAX_AGE_POSITION = len(AGE_ORDER) - 1
+
+ANOMALOUS_AGES = {
+    'Upper Paleocene (Danian)': {
+        'canonicalAge': 'Lower Paleocene (Danian)',
+        'note': ("Danian is conventionally the OLDEST stage of the Paleocene "
+                 "(immediately after the Cretaceous-Paleogene boundary), so "
+                 "'Upper Paleocene' here is chronostratigraphically inconsistent. "
+                 "Confirmed in the raw source text from two independent reporters "
+                 "(BUGWARE Inc. and PetroStrat Ltd) on recent (2023-2024) reports "
+                 "for Shell Offshore wells -- not a single-source typo. Flagged as "
+                 "an open question rather than silently corrected."),
+    },
 }
+
+# 10-stop viridis approximation (matplotlib's viridis sampled at t=0,1/9,...,1),
+# linearly interpolated in RGB between stops. Computed at build time in Python
+# so the shipped HTML needs no extra JS colormap dependency.
+VIRIDIS_STOPS = [
+    (0 / 9, (0x44, 0x01, 0x54)), (1 / 9, (0x48, 0x28, 0x78)),
+    (2 / 9, (0x3e, 0x49, 0x89)), (3 / 9, (0x31, 0x68, 0x8e)),
+    (4 / 9, (0x26, 0x82, 0x8e)), (5 / 9, (0x1f, 0x9e, 0x89)),
+    (6 / 9, (0x35, 0xb7, 0x79)), (7 / 9, (0x6e, 0xce, 0x58)),
+    (8 / 9, (0xb5, 0xde, 0x2b)), (9 / 9, (0xfd, 0xe7, 0x25)),
+]
+
+
+def viridis(t):
+    t = max(0.0, min(1.0, t))
+    for (t0, c0), (t1, c1) in zip(VIRIDIS_STOPS, VIRIDIS_STOPS[1:]):
+        if t0 <= t <= t1:
+            f = (t - t0) / (t1 - t0)
+            rgb = tuple(round(c0[i] + f * (c1[i] - c0[i])) for i in range(3))
+            return '#{:02x}{:02x}{:02x}'.format(*rgb)
+    return '#fde725'
+
+
+def age_position(age):
+    if age in ANOMALOUS_AGES:
+        return AGE_POSITION[ANOMALOUS_AGES[age]['canonicalAge']]
+    return AGE_POSITION[age]
 
 
 def fix_spelling(canon):
@@ -111,6 +176,12 @@ def load_kept_picks():
         m2 = TRAILING_LETTER_RE.match(bug_raw)
         canon = m2.group(1).strip() if m2 else bug_raw
         canon = fix_spelling(canon)
+        if age not in AGE_POSITION and age not in ANOMALOUS_AGES:
+            raise ValueError(
+                f"Unrecognized age label {age!r} (from paleo_age {v!r}) has no "
+                f"entry in AGE_ORDER/ANOMALOUS_AGES -- add it deliberately, "
+                f"don't let it fall through silently."
+            )
         kept.append({
             "api": r["api_well_number"],
             "well_name": (r["well_name"] or "").strip(),
@@ -176,14 +247,27 @@ def build_graph(kept):
         top_epoch = epoch_counter.most_common(1)[0][0]
         degree = len(bug_wells[bug])
         size = 8 + 22 * (degree / max_degree) ** 0.5
+        ages_for_bug = sorted(bug_ages[bug])
+        positions = sorted({age_position(a) for a in ages_for_bug})
+        # blended color (agreed): average chronological position across all
+        # distinct ages this bug was picked at, then map that single point
+        # through viridis -- not an RGB average of endpoint colors.
+        blend_position = sum(positions) / len(positions)
+        color = viridis(blend_position / MAX_AGE_POSITION)
+        is_anomaly = any(a in ANOMALOUS_AGES for a in ages_for_bug)
+        anomaly_notes = [ANOMALOUS_AGES[a]['note'] for a in ages_for_bug if a in ANOMALOUS_AGES]
         nodes.append({
             "id": f"bug::{bug}",
             "label": bug,
             "group": "bug",
             "shape": "dot",
-            "color": EPOCH_COLOR.get(top_epoch, EPOCH_COLOR["Unknown"]),
+            "color": color,
             "epoch": top_epoch,
-            "ages": sorted(bug_ages[bug]),
+            "ages": ages_for_bug,
+            "agePositions": positions,
+            "blended": len(positions) > 1,
+            "anomaly": is_anomaly,
+            "anomalyNotes": anomaly_notes,
             "wellDegree": degree,
             "totalPicks": sum(epoch_counter.values()),
             "size": round(size, 1),
@@ -217,16 +301,43 @@ def main():
     print(f"kept picks: {len(kept)}")
     print(f"well nodes: {len(well_nodes)}  bug nodes: {len(bug_nodes)}  edges: {len(edges)}")
 
+    degrees = sorted(n["wellDegree"] for n in bug_nodes)
+    anomaly_bugs = [n["label"] for n in bug_nodes if n["anomaly"]]
+    blended_bugs = [n["label"] for n in bug_nodes if n["blended"]]
+    print(f"bug degree range: min={degrees[0]} max={degrees[-1]}")
+    print(f"anomaly-flagged bugs: {anomaly_bugs}")
+    print(f"blended (multi-age) bugs: {blended_bugs}")
+
+    # representative color per epoch (mean age-position of that epoch's
+    # stages, mapped through viridis) -- for the epoch-filter swatches only;
+    # actual bug node colors are per-bug blended positions computed above.
+    epoch_positions = defaultdict(list)
+    for age, pos in AGE_POSITION.items():
+        epoch = extract_epoch(age)
+        epoch_positions[epoch].append(pos)
+    epoch_frac = {
+        ep: (sum(p) / len(p)) / MAX_AGE_POSITION
+        for ep, p in epoch_positions.items()
+    }
+    epoch_color = {ep: viridis(frac) for ep, frac in epoch_frac.items()}
+
     graph_data = {
         "nodes": nodes,
         "edges": edges,
         "epochOrder": EPOCH_ORDER,
-        "epochColor": EPOCH_COLOR,
+        "epochColor": epoch_color,
+        "epochFraction": epoch_frac,
+        "ageOrder": AGE_ORDER,
+        "anomalousAges": ANOMALOUS_AGES,
+        "maxAgePosition": MAX_AGE_POSITION,
+        "viridisStops": [[t, '#{:02x}{:02x}{:02x}'.format(*c)] for t, c in VIRIDIS_STOPS],
         "stats": {
             "wells": len(well_nodes),
             "bugs": len(bug_nodes),
             "edges": len(edges),
             "picks": len(kept),
+            "degreeMin": degrees[0],
+            "degreeMax": degrees[-1],
         },
     }
 
