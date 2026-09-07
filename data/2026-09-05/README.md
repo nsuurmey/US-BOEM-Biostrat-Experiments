@@ -192,3 +192,25 @@ values are each present in quantity (verified via isolated repro — one
 group is fine, two is not). The shipped page works around this by not
 passing a `group` key into vis's node objects at all; well vs. bug is
 distinguished by shape plus the app's own filtering logic instead.
+
+**Geographic scatter panel:** a third panel plots one dot per well using
+`paleo_headers.surface_latitude`/`surface_longitude` (longitude=x,
+latitude=y, no map projection — WR's extent is small enough, ~1.6&deg;
+lon &times; ~1&deg; lat, that plotting raw degrees preserves relative
+spacing well enough for this purpose). Checked before use: all 173 WR
+header rows have both values populated (zero missing), and all 106 wells
+that have multiple header rows (56 of them) agree on lat/long across every
+row (zero discrepancies) — `build_wr_network.py` raises loudly rather than
+silently picking a first-seen value if that ever stops being true.
+Longitude sign convention: BOEM's own field spec documents positive =
+East, but the actual WR data stores standard signed decimal degrees
+(negative = West, confirmed range -91.91 to -90.33 for all 173 rows,
+appropriately negative for the Gulf of Mexico) — the opposite of what the
+spec describes. No sign flip was needed since the data is already directly
+plottable; this is a spec-vs-actual-data discrepancy worth knowing about,
+not a parsing bug. Hovering or selecting a well node in the network graph
+highlights its scatter dot (and vice versa) via vis-network's
+`selectNodes`/`hoverNode`/`blurNode` API; the scatter panel always shows
+all 106 wells regardless of the network's epoch/degree/search filters (not
+linked to those filters, since the task only asked for hover/selection
+linking, not filter-scoped visibility).

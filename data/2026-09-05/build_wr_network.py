@@ -152,6 +152,7 @@ def load_kept_picks():
     cur = conn.cursor()
     cur.execute("""
         SELECT h.api_well_number, h.well_name, h.surface_block, h.lease_number,
+               h.surface_latitude, h.surface_longitude,
                p.paleo_report_id, p.paleo_age, p.paleo_sample_md,
                p.age_definite_possible, p.age_at_in
         FROM paleo_picks p
@@ -187,6 +188,8 @@ def load_kept_picks():
             "well_name": (r["well_name"] or "").strip(),
             "block": (r["surface_block"] or "").strip(),
             "lease": (r["lease_number"] or "").strip(),
+            "lat": r["surface_latitude"],
+            "lon": r["surface_longitude"],
             "report_id": r["paleo_report_id"],
             "age": age,
             "epoch": extract_epoch(age),
@@ -200,12 +203,22 @@ def load_kept_picks():
 
 def build_graph(kept):
     well_meta = {}
+    coord_mismatches = []
     for k in kept:
-        well_meta.setdefault(k["api"], {
+        meta = well_meta.setdefault(k["api"], {
             "well_name": k["well_name"], "block": k["block"], "lease": k["lease"],
-            "report_ids": set(),
+            "lat": k["lat"], "lon": k["lon"], "report_ids": set(),
         })
-        well_meta[k["api"]]["report_ids"].add(k["report_id"])
+        if (k["lat"], k["lon"]) != (meta["lat"], meta["lon"]):
+            coord_mismatches.append((k["api"], (meta["lat"], meta["lon"]), (k["lat"], k["lon"])))
+        meta["report_ids"].add(k["report_id"])
+    if coord_mismatches:
+        raise ValueError(
+            f"Wells with differing surface_latitude/longitude across their own "
+            f"header rows -- was checked and found to be zero in the original "
+            f"WR data, so this is new and needs a deliberate decision, not a "
+            f"silent first-row pick: {coord_mismatches}"
+        )
 
     bug_epoch_counts = defaultdict(Counter)
     bug_ages = defaultdict(set)
@@ -239,6 +252,8 @@ def build_graph(kept):
             "api": api,
             "lease": meta["lease"],
             "block": meta["block"],
+            "lat": meta["lat"],
+            "lon": meta["lon"],
             "reportCount": len(meta["report_ids"]),
         })
 
