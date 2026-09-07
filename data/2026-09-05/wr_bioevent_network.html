@@ -309,6 +309,13 @@ function fmtList(arr, max=6) {
   if (arr.length > max) s += ` (+${arr.length - max} more)`;
   return s;
 }
+// bug id -> array of well ids it has an edge to, reused (not recomputed)
+// from the same GRAPH.edges data already driving the network graph.
+const bugToWellIds = {};
+GRAPH.edges.forEach(e => {
+  (bugToWellIds[e.to] || (bugToWellIds[e.to] = [])).push(e.from);
+});
+
 network.on('hoverNode', (params) => {
   const n = nodesDS.get(params.node)._raw;
   let html = '';
@@ -324,14 +331,22 @@ network.on('hoverNode', (params) => {
     if (n.anomaly) {
       html += `<div style="margin-top:6px;color:#ffb877;">&#9888; ${n.anomalyNotes.join(' ')}</div>`;
     }
+    // Highlight every well in the scatter panel connected to this bug,
+    // using the same halo/color treatment as the well-to-well link.
+    (bugToWellIds[n.id] || []).forEach(wellId => {
+      const circle = scatterDotById[wellId];
+      if (circle) circle.classList.add('highlighted');
+    });
   }
   tooltip.innerHTML = html;
   tooltip.style.display = 'block';
 });
-network.on('blurNode', (params) => {
+network.on('blurNode', () => {
   tooltip.style.display = 'none';
-  const circle = scatterDotById[params.node];
-  if (circle) circle.classList.remove('highlighted');
+  // Clear every highlighted dot (covers both the single well-hover case and
+  // the potentially-many-wells bug-hover case) rather than tracking exactly
+  // which ids were lit, since only one node can be hovered at a time anyway.
+  document.querySelectorAll('.scatter-dot.highlighted').forEach(el => el.classList.remove('highlighted'));
 });
 network.on('hoverEdge', (params) => {
   const e = edgesDS.get(params.edge)._raw;
